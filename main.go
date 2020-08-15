@@ -58,13 +58,13 @@ func main() {
 	ubigeos := getAllUbigeos()
 	names := getProductsName()
 	productsUbigeo := make(chan ubigeo, len(ubigeos))
-
 	for _, ubigeo := range ubigeos {
 		wg.Add(1)
 		go generatePriceListByUbigeo(strconv.Itoa(ubigeo.Id), names, productsUbigeo)
 	}
 
 	wg.Wait()
+	close(productsUbigeo)
 
 	var result []ubigeo
 
@@ -207,7 +207,7 @@ func getProductsName() []string {
 
 	for _, fullName := range raw {
 
-		short := strings.Split(fullName, "-")[0]
+		short := strings.ReplaceAll(strings.Split(fullName, "-")[0], "\"", "")
 		if len(short) < 5 {
 			continue
 		}
