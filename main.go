@@ -4,11 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/hashicorp/go-retryablehttp"
 	"io/ioutil"
-	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 const ProductsUrl = "https://opmcovid.minsa.gob.pe/observatorio/precios.aspx/GetMedicine"
@@ -16,11 +17,16 @@ const PricesUrl = "https://opmcovid.minsa.gob.pe/observatorio/wsObservatorio.asm
 const PharmaUrl = "https://opmcovid.minsa.gob.pe/observatorio/wsObservatorio.asmx/loadDataPharma"
 
 type productPrice struct {
-	Product product `json:"product"`
-	Pharma  pharma  `json:"pharma"`
+	Product   product   `json:"product"`
+	DrugStore DrugStore `json:"drugstore"`
 }
 
-type pharma struct {
+type ubigeo struct {
+	Id   int            `json:"id_ubigeo"`
+	Data []productPrice `json:"data"`
+}
+
+type DrugStore struct {
 	Ruc       string `json:"ruc"`
 	Name      string `json:"nombre"`
 	Address   string `json:"direccion"`
@@ -30,12 +36,8 @@ type pharma struct {
 	OpenHours string `json:"horario"`
 }
 
-type productList struct {
-	Data []product `json:"products"`
-}
-
 type product struct {
-	PharmaId       string `json:"codigo"`
+	DrugStoreId    string `json:"codigo"`
 	GenericName    string `json:"nombre"`
 	MarketName     string `json:"b"`
 	Concentration  string `json:"c"`
@@ -50,15 +52,27 @@ type product struct {
 	HealthRegistry string `json:"regsan"`
 }
 
-var productMap = make(map[int]product)
-var pharmaMap = make(map[string]pharma)
+var wg sync.WaitGroup
 
 func main() {
+	ubigeos := getAllUbigeos()
 	names := getProductsName()
-	name := strings.Split(names[4], "-")[0]
-	list := getPriceList(name, "01", 1)
+	productsUbigeo := make(chan ubigeo, len(ubigeos))
 
-	dataBytes, err := json.Marshal(list)
+	for _, ubigeo := range ubigeos {
+		wg.Add(1)
+		go generatePriceListByUbigeo(strconv.Itoa(ubigeo.Id), names, productsUbigeo)
+	}
+
+	wg.Wait()
+
+	var result []ubigeo
+
+	for u := range productsUbigeo {
+		result = append(result, u)
+	}
+
+	dataBytes, err := json.Marshal(result)
 	if err != nil {
 		panic(err)
 	}
@@ -67,11 +81,29 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+
+}
+
+func generatePriceListByUbigeo(ubigeoId string, productsNames []string, c chan ubigeo) {
+	defer wg.Done()
+	var drugStoreMap = make(map[string]DrugStore)
+	var productsMap = make(map[int]product)
+	ubiID, _ := strconv.Atoi(ubigeoId)
+	result := ubigeo{Id: ubiID}
+	for _, name := range productsNames {
+		products := getProductPrices(name, ubigeoId, 1)
+		for _, p := range products {
+			drugstore, product := fillProductData(p, productsMap, drugStoreMap)
+			finalList := productPrice{DrugStore: drugstore, Product: product}
+			result.Data = append(result.Data, finalList)
+		}
+	}
+	c <- result
 }
 
 func fetchWrapper(url, body string) []string {
 	search := []byte(body)
-	r, err := http.Post(url, "application/json", bytes.NewBuffer(search))
+	r, err := retryablehttp.Post(url, "application/json", bytes.NewBuffer(search))
 	if err != nil {
 		panic(err)
 	}
@@ -82,7 +114,7 @@ func fetchWrapper(url, body string) []string {
 	return obj["d"]
 }
 
-func getPriceList(name, ubigeo string, fromPage int) []productPrice {
+func getProductPrices(name, ubigeo string, fromPage int) []product {
 	search := fmt.Sprintf(`
 {
 	"typeup": "FARMACIA",
@@ -98,74 +130,102 @@ func getPriceList(name, ubigeo string, fromPage int) []productPrice {
 
 	resp := fetchWrapper(PricesUrl, search)
 
-	var productList productList
-	data := []byte(fmt.Sprintf(`{"products": %s}`, resp[0]))
-	if err := json.Unmarshal(data, &productList); err != nil {
-		panic(err)
+	type productList struct {
+		Data []product `json:"products"`
 	}
 
-	var productPrices []productPrice
+	var products productList
 
-	for _, product := range productList.Data {
-		var productPrice productPrice
-
-		pharm, p := getPharma(product.PharmaId, product.ProductId)
-
-		productPrice.Pharma = pharm
-
-		product.MarketName = p.MarketName
-		product.Concentration = p.Concentration
-		product.Form = p.Form
-		product.Presentations = p.Presentations
-		product.Manufacturer = p.Manufacturer
-		product.SearchName = p.SearchName
-
-		productPrice.Product = product
-
-		productPrices = append(productPrices, productPrice)
+	data := []byte(fmt.Sprintf(`{"products": %s}`, resp[0]))
+	if err := json.Unmarshal(data, &products); err != nil {
+		panic(err)
 	}
 
 	re := regexp.MustCompile(`\d+`)
 	currentPage, _ := strconv.Atoi(string(re.Find([]byte(resp[1]))))
 
-	if fromPage != currentPage {
-		productPrices = append(productPrices, getPriceList(name, ubigeo, fromPage+1)...)
+	if fromPage < currentPage {
+		products.Data = append(products.Data, getProductPrices(name, ubigeo, fromPage+1)...)
 	}
 
-	return productPrices
+	return products.Data
 }
 
-func getPharma(pharmaId string, productId int) (pharma, product) {
+func fillProductData(firstHalf product, productMap map[int]product, drugStoreMap map[string]DrugStore) (DrugStore, product) {
+	drugStore, hasDrugStore := drugStoreMap[firstHalf.DrugStoreId]
+	product, hasProduct := productMap[firstHalf.ProductId]
 
-	pharm, hasPharm := pharmaMap[pharmaId]
-	product, hasProduct := productMap[productId]
-
-	if hasPharm && hasProduct {
-		return pharm, product
+	if hasDrugStore && hasProduct {
+		return drugStore, product
 	}
 
-	search := fmt.Sprintf(`{"cod_estab":"%s","cod_prod":%d}`, pharmaId, productId)
+	drugStore, secondHalf := getDrugStore(firstHalf.DrugStoreId, firstHalf.ProductId)
+
+	firstHalf.MarketName = secondHalf.MarketName
+	firstHalf.Concentration = secondHalf.Concentration
+	firstHalf.Form = secondHalf.Form
+	firstHalf.Presentations = secondHalf.Presentations
+	firstHalf.Manufacturer = secondHalf.Manufacturer
+	firstHalf.SearchName = secondHalf.SearchName
+
+	productMap[firstHalf.ProductId] = firstHalf
+	drugStoreMap[firstHalf.DrugStoreId] = drugStore
+
+	return drugStore, firstHalf
+}
+
+func getDrugStore(drugStoreId string, productId int) (DrugStore, product) {
+
+	search := fmt.Sprintf(`{"cod_estab":"%s","cod_prod":%d}`, drugStoreId, productId)
 	resp := fetchWrapper(PharmaUrl, search)
-	pharmaData := resp[0][1 : len(resp[0])-1]
-	productData := resp[1][1 : len(resp[1])-1]
+	drugStoreData := resp[0][1 : len(resp[0])-1]
+	productData := fmt.Sprintf(`{"products": %s}`, resp[1])
 
-	err := json.Unmarshal([]byte(pharmaData), &pharm)
+	type productWrapper struct {
+		Products []product `json:"products"`
+	}
+
+	var drugStore DrugStore
+	err := json.Unmarshal([]byte(drugStoreData), &drugStore)
 	if err != nil {
 		panic(err)
 	}
 
-	err = json.Unmarshal([]byte(productData), &product)
+	var pw productWrapper
+	err = json.Unmarshal([]byte(productData), &pw)
 	if err != nil {
 		panic(err)
 	}
 
-	pharmaMap[pharmaId] = pharm
-	productMap[productId] = product
-
-	return pharm, product
+	return drugStore, pw.Products[0]
 }
 
 func getProductsName() []string {
 	search := "{'prefix': ''}"
-	return fetchWrapper(ProductsUrl, search)
+	raw := fetchWrapper(ProductsUrl, search)
+	var names []string
+
+	for _, fullName := range raw {
+
+		short := strings.Split(fullName, "-")[0]
+		if len(short) < 5 {
+			continue
+		}
+
+		names = append(names, short)
+	}
+
+	return names
+}
+
+func getAllUbigeos() []ubigeo {
+	file, _ := ioutil.ReadFile("ubigeos.json")
+
+	var ubigeos []ubigeo
+	err := json.Unmarshal(file, &ubigeos)
+	if err != nil {
+		panic(err)
+	}
+
+	return ubigeos
 }
