@@ -61,3 +61,32 @@ For example:
   }
 ]
 ```
+## Structs
+
+```go
+type DrugStore struct {
+	Ruc       string `json:"ruc"`
+	Name      string `json:"nombre"`
+	Address   string `json:"direccion"`
+	Location  string `json:"ubicacion"`
+	Type      string `json:"tipo"`
+	Phone     string `json:"telefono"`
+	OpenHours string `json:"horario"`
+}
+
+type Product struct {
+	DrugStoreId    string `json:"codigo"`
+	GenericName    string `json:"nombre"`
+	MarketName     string `json:"b"`
+	Concentration  string `json:"c"`
+	Form           string `json:"d"`
+	Presentations  string `json:"f"`
+	Laboratory     string `json:"laboratorio"`
+	Manufacturer   string `json:"k"`
+	SearchName     string `json:"l"`
+	UpdatedAt      string `json:"fecha"`
+	Sector         string `json:"setcodigo"`
+	ProductId      int    `json:"codprod"`
+	HealthRegistry string `json:"regsan"`
+}
+```
