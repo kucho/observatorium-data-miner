@@ -1,4 +1,4 @@
-module observatorium
+module observatorium-data-miner
 
 go 1.13
 
