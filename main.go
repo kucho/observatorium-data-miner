@@ -41,6 +41,7 @@ type Product struct {
 	GenericName    string `json:"nombre"`
 	MarketName     string `json:"b"`
 	Concentration  string `json:"c"`
+	Price          string `json:"precio"`
 	Form           string `json:"d"`
 	Presentations  string `json:"f"`
 	Laboratory     string `json:"laboratorio"`
@@ -107,6 +108,7 @@ func generatePriceListByUbigeo(ubigeoId string, productsNames []string, c chan u
 
 func fetchWrapper(url, body string) []string {
 	search := []byte(body)
+
 	r, err := client.HTTPClient.Post(url, "application/json", bytes.NewBuffer(search))
 	if err != nil {
 		panic(err)
