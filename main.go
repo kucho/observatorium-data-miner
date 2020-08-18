@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/hashicorp/go-retryablehttp"
+	"github.com/schollz/progressbar/v3"
 	"io/ioutil"
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 )
 
 const ProductsUrl = "https://opmcovid.minsa.gob.pe/observatorio/precios.aspx/GetMedicine"
@@ -37,23 +37,23 @@ type DrugStore struct {
 }
 
 type Product struct {
-	DrugStoreId    string `json:"codigo"`
-	GenericName    string `json:"nombre"`
-	MarketName     string `json:"b"`
-	Concentration  string `json:"c"`
-	Price          string `json:"precio"`
-	Form           string `json:"d"`
-	Presentations  string `json:"f"`
-	Laboratory     string `json:"laboratorio"`
-	Manufacturer   string `json:"k"`
-	SearchName     string `json:"l"`
-	UpdatedAt      string `json:"fecha"`
-	Sector         string `json:"setcodigo"`
-	ProductId      int    `json:"codprod"`
-	HealthRegistry string `json:"regsan"`
+	DrugStoreId    string  `json:"codigo"`
+	GenericName    string  `json:"nombre"`
+	MarketName     string  `json:"b"`
+	Concentration  string  `json:"c"`
+	Price          float64 `json:"precio"`
+	Form           string  `json:"d"`
+	Presentations  string  `json:"f"`
+	Laboratory     string  `json:"laboratorio"`
+	Manufacturer   string  `json:"k"`
+	SearchName     string  `json:"l"`
+	UpdatedAt      string  `json:"fecha"`
+	Sector         string  `json:"setcodigo"`
+	ProductId      int     `json:"codprod"`
+	HealthRegistry string  `json:"regsan"`
 }
 
-var wg sync.WaitGroup
+// var wg sync.WaitGroup
 var client = retryablehttp.NewClient()
 
 func main() {
@@ -62,13 +62,21 @@ func main() {
 	ubigeos := getAllUbigeos()
 	names := getProductsName()
 	productsUbigeo := make(chan ubigeo, len(ubigeos))
+	bar := progressbar.Default(int64(len(ubigeos) * len(names)))
+	done := 0
 
 	for _, ubigeo := range ubigeos {
-		wg.Add(1)
-		go generatePriceListByUbigeo(strconv.Itoa(ubigeo.Id), names, productsUbigeo)
+		go generatePriceListByUbigeo(strconv.Itoa(ubigeo.Id), names, productsUbigeo, &done)
 	}
 
-	wg.Wait()
+	for {
+		_ = bar.Set(done)
+		if len(productsUbigeo) == cap(productsUbigeo) {
+			// Channels are full
+			break
+		}
+	}
+
 	close(productsUbigeo)
 
 	var result []ubigeo
@@ -89,8 +97,8 @@ func main() {
 
 }
 
-func generatePriceListByUbigeo(ubigeoId string, productsNames []string, c chan ubigeo) {
-	defer wg.Done()
+func generatePriceListByUbigeo(ubigeoId string, productsNames []string, c chan ubigeo, done *int) {
+	//defer wg.Done()
 	var drugStoreMap = make(map[string]DrugStore)
 	var productsMap = make(map[int]Product)
 	ubiID, _ := strconv.Atoi(ubigeoId)
@@ -101,6 +109,7 @@ func generatePriceListByUbigeo(ubigeoId string, productsNames []string, c chan u
 			drugstore, product := fillProductData(p, productsMap, drugStoreMap)
 			finalList := productPrice{DrugStore: drugstore, Product: product}
 			result.Data = append(result.Data, finalList)
+			*done += 1
 		}
 	}
 	c <- result
