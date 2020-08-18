@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 )
 
 const ProductsUrl = "https://opmcovid.minsa.gob.pe/observatorio/precios.aspx/GetMedicine"
@@ -63,14 +64,14 @@ func main() {
 	names := getProductsName()
 	productsUbigeo := make(chan ubigeo, len(ubigeos))
 	bar := progressbar.Default(int64(len(ubigeos) * len(names)))
-	done := 0
+	var done uint64
 
 	for _, ubigeo := range ubigeos {
 		go generatePriceListByUbigeo(strconv.Itoa(ubigeo.Id), names, productsUbigeo, &done)
 	}
 
 	for {
-		_ = bar.Set(done)
+		_ = bar.Set(int(done))
 		if len(productsUbigeo) == cap(productsUbigeo) {
 			// Channels are full
 			break
@@ -97,8 +98,7 @@ func main() {
 
 }
 
-func generatePriceListByUbigeo(ubigeoId string, productsNames []string, c chan ubigeo, done *int) {
-	//defer wg.Done()
+func generatePriceListByUbigeo(ubigeoId string, productsNames []string, c chan ubigeo, done *uint64) {
 	var drugStoreMap = make(map[string]DrugStore)
 	var productsMap = make(map[int]Product)
 	ubiID, _ := strconv.Atoi(ubigeoId)
@@ -109,7 +109,7 @@ func generatePriceListByUbigeo(ubigeoId string, productsNames []string, c chan u
 			drugstore, product := fillProductData(p, productsMap, drugStoreMap)
 			finalList := productPrice{DrugStore: drugstore, Product: product}
 			result.Data = append(result.Data, finalList)
-			*done += 1
+			atomic.AddUint64(done, 1)
 		}
 	}
 	c <- result
