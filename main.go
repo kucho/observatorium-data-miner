@@ -102,14 +102,14 @@ func generateListByUbigeo(ubigeoId int, productsNames []string, c chan Result, d
 			drugstore, hasDrugstore := drugStoreMap[drugstoreCode]
 
 			if !(hasProduct && hasDrugstore) {
-				product, drugstore = getDrugstore(drugstoreCode, productCode)
-
-				if !reflect.DeepEqual(product, gabs.New()) {
-					productsMap[productCode] = product
-				}
+				drugstore, product = getDrugstore(drugstoreCode, productCode)
 
 				if !reflect.DeepEqual(drugstore, gabs.New()) {
 					drugStoreMap[drugstoreCode] = drugstore
+				}
+
+				if !reflect.DeepEqual(product, gabs.New()) {
+					productsMap[productCode] = product
 				}
 			}
 
