@@ -7,6 +7,7 @@ import (
 	"github.com/hashicorp/go-retryablehttp"
 	"github.com/schollz/progressbar/v3"
 	"io/ioutil"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -102,8 +103,14 @@ func generateListByUbigeo(ubigeoId int, productsNames []string, c chan Result, d
 
 			if !(hasProduct && hasDrugstore) {
 				product, drugstore = getDrugstore(drugstoreCode, productCode)
-				productsMap[productCode] = product
-				drugStoreMap[drugstoreCode] = drugstore
+
+				if !reflect.DeepEqual(product, gabs.New()) {
+					productsMap[productCode] = product
+				}
+
+				if !reflect.DeepEqual(drugstore, gabs.New()) {
+					drugStoreMap[drugstoreCode] = drugstore
+				}
 			}
 
 			combinedKey := fmt.Sprintf("%d-%s", productCode, drugstoreCode)
@@ -162,13 +169,23 @@ func getDrugstore(drugStoreId string, productId int) (drugstore, product *gabs.C
 	if err != nil {
 		panic(err)
 	}
-	drugstore = rawDrugstore.Children()[0]
+
+	if len(rawDrugstore.Children()) == 0 {
+		drugstore = gabs.New()
+	} else {
+		drugstore = rawDrugstore.Children()[0]
+	}
 
 	rawProduct, err := gabs.ParseJSON([]byte(resp[1].Data().(string)))
 	if err != nil {
 		panic(err)
 	}
-	product = rawProduct.Children()[0]
+
+	if len(rawProduct.Children()) == 0 {
+		product = gabs.New()
+	} else {
+		product = rawProduct.Children()[0]
+	}
 
 	return
 }
@@ -222,6 +239,7 @@ func fetchWrapper(url, search string) *gabs.Container {
 		panic(err)
 	}
 	defer resp.Body.Close()
+
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		panic(err)
